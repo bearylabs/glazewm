@@ -16,8 +16,8 @@ use crate::{
   impl_common_getters, impl_container_debug, impl_window_getters,
   models::{
     Container, DirectionContainer, InsertionTarget,
-    NativeWindowProperties, TilingContainer, TilingWindow,
-    WindowContainer,
+    NativeWindowProperties, SnapArrangeState, TilingContainer,
+    TilingWindow, WindowContainer,
   },
   traits::{CommonGetters, PositionGetters, WindowGetters},
 };
@@ -42,6 +42,7 @@ struct NonTilingWindowInner {
   has_custom_floating_placement: bool,
   done_window_rules: Vec<WindowRuleConfig>,
   active_drag: Option<ActiveDrag>,
+  snap_arrange_state: SnapArrangeState,
 }
 
 impl NonTilingWindow {
@@ -76,6 +77,7 @@ impl NonTilingWindow {
       has_custom_floating_placement,
       done_window_rules,
       active_drag,
+      snap_arrange_state: SnapArrangeState::default(),
     };
 
     Self(Rc::new(RefCell::new(window)))

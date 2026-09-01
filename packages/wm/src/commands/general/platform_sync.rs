@@ -9,8 +9,10 @@ use wm_common::{
 use wm_platform::NativeWindowWindowsExt;
 #[cfg(target_os = "windows")]
 use wm_platform::{CornerStyle, OpacityValue};
-use wm_platform::{Rect, WindowZOrder};
+use wm_platform::{Dispatcher, Rect, WindowZOrder};
 
+#[cfg(target_os = "windows")]
+use crate::commands::window::sync_snap_arrange;
 use crate::{
   models::{Container, WindowContainer},
   traits::{CommonGetters, PositionGetters, WindowGetters},
@@ -285,9 +287,14 @@ fn redraw_containers(
       DisplayState::Showing | DisplayState::Shown
     );
 
-    if let Err(err) =
-      reposition_window(window, *hide_corner, &z_order, is_visible, config)
-    {
+    if let Err(err) = reposition_window(
+      window,
+      *hide_corner,
+      &z_order,
+      is_visible,
+      config,
+      &state.dispatcher,
+    ) {
       tracing::warn!("Failed to set window position: {}", err);
     }
 
@@ -343,6 +350,9 @@ fn reposition_window(
   z_order: &WindowZOrder,
   is_visible: bool,
   config: &UserConfig,
+  // LINT: `dispatcher` is only used on Windows.
+  #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+  dispatcher: &Dispatcher,
 ) -> anyhow::Result<()> {
   let rect = window
     .to_rect()?
@@ -453,6 +463,16 @@ fn reposition_window(
           // first move are resolved.
           if window.has_pending_dpi_adjustment() {
             window.native().set_window_pos(z_order, &rect, swp_flags)?;
+          }
+
+          // Some windows only forward the resize above to the content
+          // they host while arranged by the OS. Newly managed windows are
+          // covered here as well, since managing a window always queues a
+          // redraw.
+          if is_visible {
+            sync_snap_arrange(
+              window, &rect, z_order, swp_flags, dispatcher, config,
+            );
           }
         }
       }

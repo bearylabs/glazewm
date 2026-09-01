@@ -18,8 +18,8 @@ use crate::{
   impl_window_getters,
   models::{
     Container, DirectionContainer, InsertionTarget,
-    NativeWindowProperties, NonTilingWindow, TilingContainer,
-    WindowContainer,
+    NativeWindowProperties, NonTilingWindow, SnapArrangeState,
+    TilingContainer, WindowContainer,
   },
   traits::{
     CommonGetters, PositionGetters, TilingDirectionGetters,
@@ -48,6 +48,7 @@ struct TilingWindowInner {
   gaps_config: GapsConfig,
   done_window_rules: Vec<WindowRuleConfig>,
   active_drag: Option<ActiveDrag>,
+  snap_arrange_state: SnapArrangeState,
 }
 
 impl TilingWindow {
@@ -82,6 +83,7 @@ impl TilingWindow {
       gaps_config,
       done_window_rules,
       active_drag,
+      snap_arrange_state: SnapArrangeState::default(),
     };
 
     Self(Rc::new(RefCell::new(window)))

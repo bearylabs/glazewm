@@ -185,6 +185,20 @@ pub trait NativeWindowWindowsExt {
   /// This method is only available on Windows.
   fn has_owner_window(&self) -> bool;
 
+  /// Whether the window is currently arranged by the OS (i.e. snapped
+  /// into a snap layout via `Win+Arrow`, snap assist, or a drag to a
+  /// screen edge).
+  ///
+  /// Thin wrapper around [`IsWindowArranged`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-iswindowarranged).
+  ///
+  /// Returns `false` if the window is not arranged, or if the OS does not
+  /// support the query (Windows 10 versions before 1903).
+  ///
+  /// # Platform-specific
+  ///
+  /// This method is only available on Windows.
+  fn is_arranged(&self) -> bool;
+
   /// Whether the window has the given window style flag(s) set.
   ///
   /// # Platform-specific
@@ -349,6 +363,10 @@ impl NativeWindowWindowsExt for NativeWindow {
 
   fn has_owner_window(&self) -> bool {
     self.inner.has_owner_window()
+  }
+
+  fn is_arranged(&self) -> bool {
+    self.inner.is_arranged()
   }
 
   fn has_window_style(&self, style: WINDOW_STYLE) -> bool {

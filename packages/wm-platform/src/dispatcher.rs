@@ -29,7 +29,10 @@ use windows::{
     System::Environment::ExpandEnvironmentStringsW,
     UI::{
       Input::KeyboardAndMouse::{
-        GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON,
+        GetAsyncKeyState, MapVirtualKeyW, SendInput, INPUT, INPUT_0,
+        INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
+        KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VIRTUAL_KEY, VK_DOWN,
+        VK_LBUTTON, VK_LEFT, VK_RBUTTON, VK_RIGHT, VK_UP,
       },
       Shell::{
         ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS,
@@ -51,6 +54,8 @@ use crate::platform_impl::Application;
 use crate::{
   platform_impl, Display, DisplayDevice, MouseButton, NativeWindow, Point,
 };
+#[cfg(target_os = "windows")]
+use crate::{Direction, Key, KeyCode};
 
 /// Type alias for a closure to be executed by the event loop.
 pub type DispatchFn = dyn FnOnce() + Send + 'static;
@@ -178,6 +183,28 @@ pub trait DispatcherExtWindows {
     directory: &Path,
     hide_window: bool,
   ) -> crate::Result<()>;
+
+  /// Injects a synthetic snap chord (e.g. `Win+Left`), causing the OS to
+  /// snap the foreground window into a snap layout.
+  ///
+  /// The chord is injected as a single batch, so no real keyboard input
+  /// can be interleaved between its key presses. The OS processes the
+  /// injected keys asynchronously, so the foreground window is not
+  /// necessarily arranged by the time this returns.
+  ///
+  /// NOTE: The keypress is subject to the same interception as real
+  /// input. It is swallowed if the resulting chord matches one of the
+  /// WM's own keybindings, or is remapped by a third-party input
+  /// remapper. `modifier` is configurable for this reason.
+  ///
+  /// # Platform-specific
+  ///
+  /// This method is only available on Windows.
+  fn send_snap_keypress(
+    &self,
+    modifier: Key,
+    direction: &Direction,
+  ) -> crate::Result<()>;
 }
 
 #[cfg(target_os = "windows")]
@@ -301,6 +328,71 @@ impl DispatcherExtWindows for Dispatcher {
 
     unsafe { ShellExecuteExW(&raw mut exec_info) }
       .map_err(crate::Error::from)
+  }
+
+  fn send_snap_keypress(
+    &self,
+    modifier: Key,
+    direction: &Direction,
+  ) -> crate::Result<()> {
+    let modifier_key = KeyCode::try_from(modifier)
+      .map_err(|err| crate::Error::Platform(err.to_string()))?;
+
+    let modifier_key = VIRTUAL_KEY(modifier_key.0);
+
+    let direction_key = match direction {
+      Direction::Left => VK_LEFT,
+      Direction::Right => VK_RIGHT,
+      Direction::Up => VK_UP,
+      Direction::Down => VK_DOWN,
+    };
+
+    let inputs = [
+      key_input(modifier_key, false),
+      key_input(direction_key, false),
+      key_input(direction_key, true),
+      key_input(modifier_key, true),
+    ];
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    let sent_count =
+      unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+
+    if sent_count as usize != inputs.len() {
+      return Err(crate::Error::Platform(
+        "Snap keypress was blocked by the OS or another input hook."
+          .to_string(),
+      ));
+    }
+
+    Ok(())
+  }
+}
+
+/// Creates a keyboard [`INPUT`] for pressing or releasing the given key.
+///
+/// Both the Windows keys and the arrow keys are extended keys, so
+/// `KEYEVENTF_EXTENDEDKEY` is always set.
+#[cfg(target_os = "windows")]
+fn key_input(key: VIRTUAL_KEY, is_keyup: bool) -> INPUT {
+  let flags = if is_keyup {
+    KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP
+  } else {
+    KEYEVENTF_EXTENDEDKEY
+  };
+
+  INPUT {
+    r#type: INPUT_KEYBOARD,
+    Anonymous: INPUT_0 {
+      ki: KEYBDINPUT {
+        wVk: key,
+        #[allow(clippy::cast_possible_truncation)]
+        wScan: unsafe { MapVirtualKeyW(u32::from(key.0), MAPVK_VK_TO_VSC) }
+          as u16,
+        dwFlags: flags,
+        ..Default::default()
+      },
+    },
   }
 }
 

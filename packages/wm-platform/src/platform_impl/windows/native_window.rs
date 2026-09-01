@@ -1,9 +1,9 @@
-use std::time::Duration;
+use std::{sync::OnceLock, time::Duration};
 
 use tokio::task;
 use tracing::warn;
 use windows::{
-  core::PWSTR,
+  core::{s, w, PWSTR},
   Win32::{
     Foundation::{CloseHandle, BOOL, HWND, LPARAM, POINT, RECT},
     Graphics::Dwm::{
@@ -12,9 +12,12 @@ use windows::{
       DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT, DWMWCP_DONOTROUND,
       DWMWCP_ROUND, DWMWCP_ROUNDSMALL,
     },
-    System::Threading::{
-      OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-      PROCESS_QUERY_LIMITED_INFORMATION,
+    System::{
+      LibraryLoader::{GetModuleHandleW, GetProcAddress},
+      Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+      },
     },
     UI::{
       Input::KeyboardAndMouse::{
@@ -183,6 +186,18 @@ impl NativeWindow {
   #[allow(clippy::unnecessary_wraps)]
   pub(crate) fn is_maximized(&self) -> crate::Result<bool> {
     Ok(unsafe { IsZoomed(self.hwnd()) }.as_bool())
+  }
+
+  /// Implements [`NativeWindowWindowsExt::is_arranged`].
+  pub(crate) fn is_arranged(&self) -> bool {
+    match is_window_arranged_fn() {
+      // SAFETY: The resolved pointer is `user32.dll`'s `IsWindowArranged`,
+      // which takes a single `HWND` and has no additional preconditions.
+      Some(is_window_arranged) => {
+        unsafe { is_window_arranged(self.hwnd()) }.as_bool()
+      }
+      None => false,
+    }
   }
 
   /// Implements [`NativeWindow::is_resizable`].
@@ -734,6 +749,43 @@ impl NativeWindow {
 
     Ok(cloaked != 0)
   }
+}
+
+/// Signature of `user32.dll`'s [`IsWindowArranged`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-iswindowarranged).
+type IsWindowArrangedFn = unsafe extern "system" fn(HWND) -> BOOL;
+
+/// Lazily resolved pointer to `IsWindowArranged`.
+///
+/// `None` if the function could not be resolved.
+static IS_WINDOW_ARRANGED: OnceLock<Option<IsWindowArrangedFn>> =
+  OnceLock::new();
+
+/// Resolves `IsWindowArranged` from `user32.dll`, caching the result.
+///
+/// The function is only exported on Windows 10 1903 and later, so it is
+/// resolved at runtime rather than imported. A static import would
+/// prevent the process from launching altogether on older versions.
+///
+/// Returns `None` if the function is unavailable.
+fn is_window_arranged_fn() -> Option<IsWindowArrangedFn> {
+  *IS_WINDOW_ARRANGED.get_or_init(|| {
+    // SAFETY: `user32.dll` is implicitly loaded by this process, and the
+    // returned pointer is only transmuted to the documented signature of
+    // `IsWindowArranged`.
+    let proc_address = unsafe {
+      let module = GetModuleHandleW(w!("user32.dll")).ok()?;
+      GetProcAddress(module, s!("IsWindowArranged"))
+    }?;
+
+    // SAFETY: `GetProcAddress` returned a non-null pointer to
+    // `IsWindowArranged`, which matches `IsWindowArrangedFn`.
+    Some(unsafe {
+      std::mem::transmute::<
+        unsafe extern "system" fn() -> isize,
+        IsWindowArrangedFn,
+      >(proc_address)
+    })
+  })
 }
 
 impl PartialEq for NativeWindow {

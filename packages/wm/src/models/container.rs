@@ -16,7 +16,7 @@ use wm_platform::{Direction, NativeWindow, Rect, RectDelta};
 use crate::{
   models::{
     Monitor, NativeWindowProperties, NonTilingWindow, RootContainer,
-    SplitContainer, TilingWindow, Workspace,
+    SnapArrangeState, SplitContainer, TilingWindow, Workspace,
   },
   traits::*,
   user_config::UserConfig,
