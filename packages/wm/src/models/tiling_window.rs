@@ -18,8 +18,8 @@ use crate::{
   impl_window_getters,
   models::{
     Container, DirectionContainer, InsertionTarget,
-    NativeWindowProperties, NonTilingWindow, TilingContainer,
-    WindowContainer,
+    NativeWindowProperties, NonTilingWindow, SnapArrangeState,
+    TilingContainer, WindowContainer,
   },
   traits::{
     CommonGetters, PositionGetters, TilingDirectionGetters,
@@ -48,6 +48,7 @@ struct TilingWindowInner {
   gaps_config: GapsConfig,
   done_window_rules: Vec<WindowRuleConfig>,
   active_drag: Option<ActiveDrag>,
+  snap_arrange_state: SnapArrangeState,
 }
 
 impl TilingWindow {
@@ -82,6 +83,7 @@ impl TilingWindow {
       gaps_config,
       done_window_rules,
       active_drag,
+      snap_arrange_state: SnapArrangeState::default(),
     };
 
     Self(Rc::new(RefCell::new(window)))
@@ -92,7 +94,7 @@ impl TilingWindow {
     state: WindowState,
     insertion_target: Option<InsertionTarget>,
   ) -> NonTilingWindow {
-    NonTilingWindow::new(
+    let non_tiling_window = NonTilingWindow::new(
       Some(self.id()),
       self.native().clone(),
       self.native_properties().clone(),
@@ -104,7 +106,15 @@ impl TilingWindow {
       self.has_custom_floating_placement(),
       self.done_window_rules(),
       self.active_drag(),
-    )
+    );
+
+    // Carry over the snap-arrange state, since a window that is restored
+    // from a minimized state has to be primed again.
+    let snap_arrange_state = self.snap_arrange_state();
+    non_tiling_window
+      .update_snap_arrange_state(|state| *state = snap_arrange_state);
+
+    non_tiling_window
   }
 
   pub fn to_dto(&self) -> anyhow::Result<ContainerDto> {

@@ -14,6 +14,8 @@ use wm_platform::{
   Dispatcher, LengthValue, PlatformEvent, RectDelta, WindowEvent,
 };
 
+#[cfg(target_os = "windows")]
+use crate::commands::window::{active_prime, send_scheduled_prime};
 use crate::{
   commands::{
     container::{
@@ -142,6 +144,30 @@ impl WindowManager {
         }
       },
     }?;
+
+    if !state.is_paused && state.pending_sync.has_changes() {
+      platform_sync(state, config)?;
+    }
+
+    Ok(())
+  }
+
+  /// Sends the snap chord of a scheduled snap-arrange prime once it is
+  /// safe to do so, and resolves the attempt that is in progress, if any,
+  /// once it has timed out or settled.
+  ///
+  /// Priming is otherwise driven by window events, which aren't
+  /// guaranteed to arrive after the prime has been scheduled or the chord
+  /// has been sent.
+  #[cfg(target_os = "windows")]
+  pub fn sync_snap_prime(
+    &mut self,
+    config: &UserConfig,
+  ) -> anyhow::Result<()> {
+    let state = &mut self.state;
+
+    active_prime(state, config);
+    send_scheduled_prime(state, config);
 
     if !state.is_paused && state.pending_sync.has_changes() {
       platform_sync(state, config)?;

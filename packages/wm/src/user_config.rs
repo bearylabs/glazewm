@@ -6,6 +6,8 @@ use wm_common::{
   WindowMatchConfig, WindowRuleConfig, WindowRuleEvent, WorkspaceConfig,
 };
 
+#[cfg(target_os = "windows")]
+use crate::commands::window::RAIL_WINDOW_CLASS;
 use crate::{
   models::{Monitor, WindowContainer, Workspace},
   traits::{CommonGetters, WindowGetters},
@@ -146,6 +148,20 @@ impl UserConfig {
     window_rules.push(WindowRuleConfig {
       commands: vec![InvokeCommand::Ignore],
       match_window: vec![
+        #[cfg(target_os = "windows")]
+        WindowMatchConfig {
+          window_process: Some(MatchType::Equals {
+            // WSLg's RDP client. It spawns a dozen helper windows (e.g.
+            // `TscShellContainerClass`) alongside the `RAIL_WINDOW`
+            // windows that represent the Linux applications. Managing or
+            // moving the helpers hangs the app-launch handshake.
+            equals: "msrdc".to_string(),
+          }),
+          window_class: Some(MatchType::NotEquals {
+            not_equals: RAIL_WINDOW_CLASS.to_string(),
+          }),
+          ..WindowMatchConfig::default()
+        },
         WindowMatchConfig {
           window_process: Some(MatchType::Equals {
             equals: "SearchApp".to_string(),

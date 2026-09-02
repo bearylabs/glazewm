@@ -67,6 +67,28 @@ pub struct WmState {
   /// Whether the OS focused window is the same as the WM focused window.
   pub is_focus_synced: bool,
 
+  /// Time of the most recent focus event from the OS.
+  ///
+  /// Used to hold off snap-arrange priming while focus is still
+  /// changing. Only used on Windows.
+  pub last_focus_event_timestamp: Option<Instant>,
+
+  /// ID of the window that is currently being primed for snap resizing.
+  ///
+  /// Set while the snap chord is in flight and for a short while after
+  /// the OS has arranged the window. Priming acts on the foreground
+  /// window, so only one window can be primed at a time. Only used on
+  /// Windows.
+  pub active_snap_prime: Option<Uuid>,
+
+  /// ID of the window that is scheduled to be primed for snap resizing,
+  /// and when it was scheduled.
+  ///
+  /// Priming is scheduled by a redraw and carried out shortly after, once
+  /// the window's position has been applied and focus has settled. Only
+  /// used on Windows.
+  pub scheduled_snap_prime: Option<(Uuid, Instant)>,
+
   /// Whether the initial state has been populated.
   has_initialized: bool,
 
@@ -94,6 +116,9 @@ impl WmState {
       ignored_windows: Vec::new(),
       is_paused: false,
       is_focus_synced: false,
+      last_focus_event_timestamp: None,
+      active_snap_prime: None,
+      scheduled_snap_prime: None,
       has_initialized: false,
       event_tx,
       exit_tx,

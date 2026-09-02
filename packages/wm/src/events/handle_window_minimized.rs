@@ -2,6 +2,8 @@ use tracing::info;
 use wm_common::{try_warn, WindowState};
 use wm_platform::NativeWindow;
 
+#[cfg(target_os = "windows")]
+use crate::models::SnapArrangeState;
 use crate::{
   commands::{
     container::set_focused_descendant, window::update_window_state,
@@ -35,6 +37,13 @@ pub fn handle_window_minimized(
         state,
         config,
       )?;
+
+      // Minimizing makes the host that owns a snap-arrange window drop
+      // its snap state, so the window has to be primed again once it's
+      // restored. The OS' arranged flag can still report the window as
+      // arranged at that point, hence the explicit invalidation.
+      #[cfg(target_os = "windows")]
+      window.update_snap_arrange_state(SnapArrangeState::invalidate);
 
       // Clear the drag state, as a window can be minimized while
       // being dragged (e.g. via `toggle-minimized`).

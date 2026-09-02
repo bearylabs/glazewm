@@ -3,6 +3,10 @@ use tracing::info;
 use wm_common::{DisplayState, WindowRuleEvent, WmEvent};
 use wm_platform::NativeWindow;
 
+#[cfg(target_os = "windows")]
+use crate::commands::window::{
+  dismiss_snap_assist, queue_redraw_if_needs_prime,
+};
 use crate::{
   commands::{
     container::set_focused_descendant, window::run_window_rules,
@@ -23,6 +27,8 @@ pub fn handle_window_focused(
   let focused_container =
     state.focused_container().context("No focused container.")?;
 
+  state.last_focus_event_timestamp = Some(std::time::Instant::now());
+
   // Update the focus sync state. If the OS focused window is not same as
   // the WM's focused container, then the focus is not synced.
   state.is_focus_synced = match focused_container.as_window_container() {
@@ -38,6 +44,14 @@ pub fn handle_window_focused(
   // focus target and then to the WM's focus target.
   if should_override_focus(state) {
     state.pending_sync.queue_focus_change();
+    return Ok(());
+  }
+
+  // While a window is being primed for snap resizing, the OS' snap
+  // assist flyout can take focus. It is dismissed without changing the
+  // foreground window, since that would cancel the arrangement.
+  #[cfg(target_os = "windows")]
+  if dismiss_snap_assist(native_window, state, config) {
     return Ok(());
   }
 
@@ -63,6 +77,10 @@ pub fn handle_window_focused(
     if focused_container == window.clone().into() {
       state.is_focus_synced = true;
       state.pending_sync.queue_workspace_to_reorder(workspace);
+
+      #[cfg(target_os = "windows")]
+      queue_redraw_if_needs_prime(&window, state, config);
+
       return Ok(());
     }
 
@@ -83,6 +101,11 @@ pub fn handle_window_focused(
 
     // Update the WM's focus state.
     set_focused_descendant(&window.clone().into(), None);
+
+    // Priming for snap resizing only happens while the window is the
+    // WM's focus container, so give it a chance now that it is.
+    #[cfg(target_os = "windows")]
+    queue_redraw_if_needs_prime(&window, state, config);
 
     // Run window rules for focus events.
     run_window_rules(

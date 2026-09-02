@@ -184,6 +184,13 @@ async fn start_wm(
   cleanup_interval
     .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+  // Create an interval for carrying out snap-arrange priming. Only polled
+  // while an attempt is scheduled or in progress (Windows-only).
+  let mut snap_prime_interval =
+    tokio::time::interval(Duration::from_millis(100));
+  snap_prime_interval
+    .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
   loop {
     let res = tokio::select! {
       _ = signal::ctrl_c() => {
@@ -219,6 +226,16 @@ async fn start_wm(
           Ok(())
         } else {
           wm.state.cleanup_invalid_windows()
+        }
+      },
+      _ = snap_prime_interval.tick(), if wm.state.active_snap_prime.is_some() || wm.state.scheduled_snap_prime.is_some() => {
+        #[cfg(target_os = "windows")]
+        {
+          wm.sync_snap_prime(&config)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+          Ok(())
         }
       },
       Some((

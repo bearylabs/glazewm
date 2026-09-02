@@ -9,6 +9,8 @@ use wm_platform::NativeWindowWindowsExt;
 use wm_platform::{LengthValue, MouseButton, RectDelta};
 use wm_platform::{NativeWindow, Rect};
 
+#[cfg(target_os = "windows")]
+use crate::commands::window::{active_prime, complete_prime};
 use crate::{
   commands::{
     container::{flatten_split_container, move_container_within_tree},
@@ -42,6 +44,19 @@ pub fn handle_window_moved_or_resized(
     window.update_native_properties(|properties| {
       properties.frame = frame_position.clone();
     });
+
+    // The window has been snapped by the OS to prime it for snap
+    // resizing. The snap rect is replaced once the snap has settled, so
+    // it must not be interpreted as a drag or a state change.
+    #[cfg(target_os = "windows")]
+    if active_prime(state, config).is_some_and(|active| {
+      active.id() == window.id()
+        && active.snap_arrange_state().is_in_flight()
+    }) && window.native().is_arranged()
+    {
+      complete_prime(&window);
+      return Ok(());
+    }
 
     // Handle windows that are actively being dragged.
     if !state.is_paused && window.active_drag().is_some() {
