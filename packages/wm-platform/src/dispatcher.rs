@@ -29,7 +29,10 @@ use windows::{
     System::Environment::ExpandEnvironmentStringsW,
     UI::{
       Input::KeyboardAndMouse::{
-        GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON,
+        GetAsyncKeyState, MapVirtualKeyW, SendInput, INPUT, INPUT_0,
+        INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+        KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC_EX,
+        VIRTUAL_KEY, VK_LBUTTON, VK_RBUTTON,
       },
       Shell::{
         ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS,
@@ -51,6 +54,8 @@ use crate::platform_impl::Application;
 use crate::{
   platform_impl, Display, DisplayDevice, MouseButton, NativeWindow, Point,
 };
+#[cfg(target_os = "windows")]
+use crate::{Key, KeyCode};
 
 /// Type alias for a closure to be executed by the event loop.
 pub type DispatchFn = dyn FnOnce() + Send + 'static;
@@ -178,6 +183,24 @@ pub trait DispatcherExtWindows {
     directory: &Path,
     hide_window: bool,
   ) -> crate::Result<()>;
+
+  /// Injects a synthetic keypress of the given keys (e.g. `Win+Left`),
+  /// which the OS delivers to the foreground window.
+  ///
+  /// The keys are pressed in order and released in reverse order, as a
+  /// single batch, so no real keyboard input can be interleaved. The OS
+  /// processes the injected keys asynchronously, so their effect is not
+  /// necessarily visible by the time this returns.
+  ///
+  /// NOTE: The keypress is subject to the same interception as real
+  /// input. It is swallowed if the resulting chord matches one of the
+  /// WM's own keybindings, or is remapped by a third-party input
+  /// remapper.
+  ///
+  /// # Platform-specific
+  ///
+  /// This method is only available on Windows.
+  fn send_keypress(&self, keys: &[Key]) -> crate::Result<()>;
 }
 
 #[cfg(target_os = "windows")]
@@ -301,6 +324,72 @@ impl DispatcherExtWindows for Dispatcher {
 
     unsafe { ShellExecuteExW(&raw mut exec_info) }
       .map_err(crate::Error::from)
+  }
+
+  fn send_keypress(&self, keys: &[Key]) -> crate::Result<()> {
+    let virtual_keys = keys
+      .iter()
+      .map(|key| {
+        KeyCode::try_from(*key)
+          .map(|key_code| VIRTUAL_KEY(key_code.0))
+          .map_err(|err| crate::Error::Platform(err.to_string()))
+      })
+      .collect::<crate::Result<Vec<_>>>()?;
+
+    let inputs = virtual_keys
+      .iter()
+      .map(|key| key_input(*key, false))
+      .chain(virtual_keys.iter().rev().map(|key| key_input(*key, true)))
+      .collect::<Vec<_>>();
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    let sent_count =
+      unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+
+    if sent_count as usize != inputs.len() {
+      return Err(crate::Error::Platform(
+        "Keypress was blocked by the OS or another input hook."
+          .to_string(),
+      ));
+    }
+
+    Ok(())
+  }
+}
+
+/// Creates a keyboard [`INPUT`] for pressing or releasing the given key.
+///
+/// `KEYEVENTF_EXTENDEDKEY` is set for keys that are extended keys (e.g.
+/// the Windows keys and the arrow keys), as determined by their scan
+/// code.
+#[cfg(target_os = "windows")]
+fn key_input(key: VIRTUAL_KEY, is_keyup: bool) -> INPUT {
+  #[allow(clippy::cast_possible_truncation)]
+  let scan_code =
+    unsafe { MapVirtualKeyW(u32::from(key.0), MAPVK_VK_TO_VSC_EX) } as u16;
+
+  // Extended keys have a scan code prefixed with `0xE0`.
+  let mut flags = if is_keyup {
+    KEYEVENTF_KEYUP
+  } else {
+    KEYBD_EVENT_FLAGS(0)
+  };
+
+  if scan_code >> 8 == 0xE0 {
+    flags |= KEYEVENTF_EXTENDEDKEY;
+  }
+
+  INPUT {
+    r#type: INPUT_KEYBOARD,
+    Anonymous: INPUT_0 {
+      ki: KEYBDINPUT {
+        wVk: key,
+        #[allow(clippy::cast_possible_truncation)]
+        wScan: u16::from(scan_code as u8),
+        dwFlags: flags,
+        ..Default::default()
+      },
+    },
   }
 }
 
