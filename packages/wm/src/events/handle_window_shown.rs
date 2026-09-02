@@ -4,7 +4,7 @@ use wm_platform::NativeWindow;
 
 #[cfg(target_os = "windows")]
 use crate::commands::window::{
-  dismiss_snap_assist, queue_redraw_if_needs_prime,
+  dismiss_snap_assist, queue_redraw_if_unprimed,
 };
 use crate::{
   commands::window::manage_window, traits::WindowGetters,
@@ -34,10 +34,10 @@ pub fn handle_window_shown(
     {
       window.set_display_state(DisplayState::Shown);
 
-      // Priming for snap resizing is skipped while the window is hidden,
-      // so redraw now that it's shown.
+      // Priming for snap resizing is skipped while the window is
+      // hidden, so redraw now that it's shown.
       #[cfg(target_os = "windows")]
-      queue_redraw_if_needs_prime(&window, state, config);
+      queue_redraw_if_unprimed(&window, state, config);
     } else {
       state.pending_sync.queue_container_to_redraw(window);
     }

@@ -5,7 +5,7 @@ use wm_platform::NativeWindow;
 
 #[cfg(target_os = "windows")]
 use crate::commands::window::{
-  dismiss_snap_assist, queue_redraw_if_needs_prime,
+  dismiss_snap_assist, is_priming_focus, queue_redraw_if_unprimed,
 };
 use crate::{
   commands::{
@@ -55,6 +55,14 @@ pub fn handle_window_focused(
     return Ok(());
   }
 
+  // Priming focuses the window it primes, and the OS focuses windows of
+  // its own while acting on the snap. Neither changes the WM's focus
+  // state, which is handed back the foreground once the attempt is done.
+  #[cfg(target_os = "windows")]
+  if is_priming_focus(native_window, state, config) {
+    return Ok(());
+  }
+
   // Ignore the focus event if window is being hidden by the WM.
   if let Some(window) = &found_window {
     if window.display_state() == DisplayState::Hiding {
@@ -79,7 +87,7 @@ pub fn handle_window_focused(
       state.pending_sync.queue_workspace_to_reorder(workspace);
 
       #[cfg(target_os = "windows")]
-      queue_redraw_if_needs_prime(&window, state, config);
+      queue_redraw_if_unprimed(&window, state, config);
 
       return Ok(());
     }
@@ -102,10 +110,10 @@ pub fn handle_window_focused(
     // Update the WM's focus state.
     set_focused_descendant(&window.clone().into(), None);
 
-    // Priming for snap resizing only happens while the window is the
-    // WM's focus container, so give it a chance now that it is.
+    // Pick up an arrangement that the OS cancelled while the window was
+    // not being redrawn.
     #[cfg(target_os = "windows")]
-    queue_redraw_if_needs_prime(&window, state, config);
+    queue_redraw_if_unprimed(&window, state, config);
 
     // Run window rules for focus events.
     run_window_rules(

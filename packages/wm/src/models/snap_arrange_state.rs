@@ -1,12 +1,15 @@
 use std::time::{Duration, Instant};
 
+use wm_platform::Rect;
+
 /// How many consecutive failed priming attempts are made before giving up.
 ///
 /// Priming injects a synthetic keypress and briefly moves the window, so
 /// it must not be retried indefinitely when the OS refuses to arrange the
 /// window (e.g. because the keypress is swallowed by an input hook) or
-/// keeps cancelling the arrangement. Attempts are replenished by
-/// [`SnapArrangeState::invalidate`] and [`SnapArrangeState::retry`].
+/// cancels the arrangement right away. Attempts are replenished by
+/// [`SnapArrangeState::mark_settled`], [`SnapArrangeState::invalidate`]
+/// and [`SnapArrangeState::retry`].
 const MAX_FAILED_ATTEMPTS: u32 = 3;
 
 /// Phase of snap-arrange priming for a single window.
@@ -31,6 +34,13 @@ pub enum SnapArrangePhase {
   Primed {
     /// When the window was observed as arranged.
     at: Instant,
+
+    /// When the OS was last observed to have stopped interacting with
+    /// the window.
+    ///
+    /// Pushed forward by [`SnapArrangeState::defer_settle`] for as long
+    /// as the OS keeps the window from being the foreground window.
+    settling_since: Instant,
   },
 
   /// Priming failed [`MAX_FAILED_ATTEMPTS`] times in a row.
@@ -53,6 +63,10 @@ pub struct SnapArrangeState {
   /// Number of priming attempts that failed or were cancelled since the
   /// attempts were last replenished.
   failed_attempts: u32,
+
+  /// Rect that was last applied to the window while the OS considered it
+  /// arranged, and that therefore reached the content the window hosts.
+  applied_rect: Option<Rect>,
 }
 
 // LINT: Snap-arrange priming is only performed on Windows.
@@ -63,6 +77,19 @@ impl SnapArrangeState {
   #[must_use]
   pub fn phase(&self) -> SnapArrangePhase {
     self.phase
+  }
+
+  /// Gets the rect that last reached the content the window hosts.
+  ///
+  /// Returns `None` if no rect is known to have reached it.
+  #[must_use]
+  pub fn applied_rect(&self) -> Option<Rect> {
+    self.applied_rect.clone()
+  }
+
+  /// Records that `rect` reached the content the window hosts.
+  pub fn mark_applied(&mut self, rect: Rect) {
+    self.applied_rect = Some(rect);
   }
 
   /// Whether a priming attempt should be started.
@@ -98,14 +125,18 @@ impl SnapArrangeState {
     matches!(self.phase, SnapArrangePhase::Primed { .. })
   }
 
-  /// Whether the window was primed less than `settle_duration` ago.
+  /// Whether the OS stopped interacting with a primed window less than
+  /// `settle_duration` ago.
   ///
   /// The OS keeps interacting with the window (e.g. by showing its snap
-  /// assist flyout) for a short while after arranging it.
+  /// assist flyout) for a short while after arranging it, which is
+  /// accounted for by [`SnapArrangeState::defer_settle`].
   #[must_use]
   pub fn is_settling(&self, settle_duration: Duration) -> bool {
     match self.phase {
-      SnapArrangePhase::Primed { at } => at.elapsed() <= settle_duration,
+      SnapArrangePhase::Primed { settling_since, .. } => {
+        settling_since.elapsed() <= settle_duration
+      }
       _ => false,
     }
   }
@@ -119,10 +150,50 @@ impl SnapArrangeState {
 
   /// Records that the window has been arranged by the OS.
   ///
-  /// Failed attempts are kept, since the OS can cancel the arrangement
-  /// again afterwards.
+  /// Failed attempts are kept until the attempt has settled, since the OS
+  /// can still cancel the arrangement right afterwards.
   pub fn mark_primed(&mut self) {
-    self.phase = SnapArrangePhase::Primed { at: Instant::now() };
+    let now = Instant::now();
+
+    self.phase = SnapArrangePhase::Primed {
+      at: now,
+      settling_since: now,
+    };
+  }
+
+  /// Restarts the settle period of a primed window.
+  ///
+  /// Called while the OS is still interacting with the window after
+  /// arranging it, which it signals by keeping the window from being the
+  /// foreground window. Moving the window during that time cancels the
+  /// arrangement, so the settle period only starts once the OS has handed
+  /// the window back.
+  ///
+  /// Has no effect once the window has been primed for longer than
+  /// `max_settle_duration`, so that a window that never regains focus
+  /// (e.g. because the user focused another window in the meantime) is
+  /// not deferred indefinitely.
+  pub fn defer_settle(&mut self, max_settle_duration: Duration) {
+    if let SnapArrangePhase::Primed { at, settling_since } = &mut self.phase
+    {
+      if at.elapsed() <= max_settle_duration {
+        *settling_since = Instant::now();
+      }
+    }
+  }
+
+  /// Records that a priming attempt has settled with the window still
+  /// arranged.
+  ///
+  /// Replenishes the failed attempts, so that the budget only limits
+  /// consecutive failures. The OS cancels the arrangement of a settled
+  /// window every so often (e.g. when a sibling window is closed while
+  /// the window is being resized), which the window has to be able to
+  /// recover from for the rest of its lifetime.
+  pub fn mark_settled(&mut self) {
+    if self.is_primed() {
+      self.failed_attempts = 0;
+    }
   }
 
   /// Records that the OS did not arrange the window in time, or cancelled
@@ -144,10 +215,13 @@ impl SnapArrangeState {
   /// Marks the window as needing to be primed again.
   ///
   /// Called when its host is known to have dropped the snap state, which
-  /// happens when the window is minimized.
+  /// happens when the window is minimized. The rect that last reached the
+  /// content the window hosts is forgotten as well, since the host resizes
+  /// that content on its own while the window is minimized.
   pub fn invalidate(&mut self) {
     self.phase = SnapArrangePhase::NeedsPrime;
     self.failed_attempts = 0;
+    self.applied_rect = None;
   }
 
   /// Gives a window that could not be primed another chance.
@@ -166,6 +240,8 @@ impl SnapArrangeState {
 #[cfg(test)]
 mod tests {
   use std::time::Duration;
+
+  use wm_platform::Rect;
 
   use super::{SnapArrangePhase, SnapArrangeState, MAX_FAILED_ATTEMPTS};
 
@@ -216,6 +292,53 @@ mod tests {
   }
 
   #[test]
+  fn applied_rect_is_forgotten_on_invalidation() {
+    let mut state = SnapArrangeState::default();
+    assert_eq!(state.applied_rect(), None);
+
+    let rect = Rect::from_xy(0, 0, 800, 600);
+    state.mark_applied(rect.clone());
+    assert_eq!(state.applied_rect(), Some(rect));
+
+    state.invalidate();
+    assert_eq!(state.applied_rect(), None);
+  }
+
+  #[test]
+  fn settling_is_deferred_while_the_os_interacts() {
+    let mut state = SnapArrangeState::default();
+    state.mark_in_flight();
+    state.mark_primed();
+
+    std::thread::sleep(Duration::from_millis(2));
+    assert!(!state.is_settling(Duration::from_millis(1)));
+
+    state.defer_settle(Duration::from_secs(60));
+    assert!(state.is_settling(Duration::from_millis(1)));
+  }
+
+  #[test]
+  fn settling_is_not_deferred_past_the_max_duration() {
+    let mut state = SnapArrangeState::default();
+    state.mark_in_flight();
+    state.mark_primed();
+
+    std::thread::sleep(Duration::from_millis(2));
+    state.defer_settle(Duration::ZERO);
+    assert!(!state.is_settling(Duration::from_millis(1)));
+  }
+
+  #[test]
+  fn settling_is_only_deferred_while_primed() {
+    let mut state = SnapArrangeState::default();
+    state.mark_in_flight();
+
+    state.defer_settle(Duration::from_secs(60));
+    assert!(state.is_in_flight());
+    assert!(!state.is_settling(Duration::from_secs(60)));
+  }
+
+  #[test]
   fn retries_until_max_failed_attempts() {
     let mut state = SnapArrangeState::default();
 
@@ -232,7 +355,7 @@ mod tests {
   }
 
   #[test]
-  fn success_keeps_failed_attempts() {
+  fn unsettled_success_keeps_failed_attempts() {
     let mut state = SnapArrangeState::default();
 
     for _ in 1..MAX_FAILED_ATTEMPTS {
@@ -243,7 +366,43 @@ mod tests {
     state.mark_in_flight();
     state.mark_primed();
 
-    // A cancelled arrangement counts as the final failed attempt.
+    // An arrangement that is cancelled before it settled counts as the
+    // final failed attempt.
+    state.mark_failed();
+    assert_eq!(state.phase(), SnapArrangePhase::GaveUp);
+  }
+
+  #[test]
+  fn settling_replenishes_attempts() {
+    let mut state = SnapArrangeState::default();
+
+    for _ in 1..MAX_FAILED_ATTEMPTS {
+      state.mark_in_flight();
+      state.mark_failed();
+    }
+
+    state.mark_in_flight();
+    state.mark_primed();
+    state.mark_settled();
+
+    for _ in 1..MAX_FAILED_ATTEMPTS {
+      state.mark_in_flight();
+      state.mark_failed();
+      assert!(state.needs_prime());
+    }
+  }
+
+  #[test]
+  fn settling_only_replenishes_attempts_while_primed() {
+    let mut state = SnapArrangeState::default();
+
+    for _ in 1..MAX_FAILED_ATTEMPTS {
+      state.mark_in_flight();
+      state.mark_failed();
+    }
+
+    state.mark_in_flight();
+    state.mark_settled();
     state.mark_failed();
     assert_eq!(state.phase(), SnapArrangePhase::GaveUp);
   }

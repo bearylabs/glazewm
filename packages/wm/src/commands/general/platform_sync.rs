@@ -455,22 +455,28 @@ fn reposition_window(
         _ => {
           swp_flags |= SWP_FRAMECHANGED;
 
-          window.native().set_window_pos(z_order, &rect, swp_flags)?;
+          // Some windows only forward the resize below to the content
+          // they host while arranged by the OS, and have to be primed to
+          // be in that state. Priming resizes the window, so it is given
+          // a rect that leaves room for that until it has been primed.
+          // Newly managed windows are covered here as well, since
+          // managing a window always queues a redraw.
+          let prime_rect = if is_visible {
+            sync_snap_arrange(window, &rect, state, config)
+          } else {
+            None
+          };
+
+          let rect = prime_rect.as_ref().unwrap_or(&rect);
+
+          window.native().set_window_pos(z_order, rect, swp_flags)?;
 
           // When there's a mismatch between the DPI of the monitor and the
           // window, the window might be sized incorrectly after the first
           // move. If we set the position twice, inconsistencies after the
           // first move are resolved.
           if window.has_pending_dpi_adjustment() {
-            window.native().set_window_pos(z_order, &rect, swp_flags)?;
-          }
-
-          // Some windows only forward the resize above to the content
-          // they host while arranged by the OS. Newly managed windows are
-          // covered here as well, since managing a window always queues a
-          // redraw.
-          if is_visible {
-            sync_snap_arrange(window, state, config);
+            window.native().set_window_pos(z_order, rect, swp_flags)?;
           }
         }
       }
