@@ -96,6 +96,10 @@ pub struct GeneralConfig {
 
   /// Affects which windows get shown in the native Windows taskbar.
   pub show_all_in_taskbar: bool,
+
+  /// Config for resizing windows that only respond to the OS' snap
+  /// arrangement.
+  pub snap_arrange: SnapArrangeConfig,
 }
 
 impl Default for GeneralConfig {
@@ -118,6 +122,55 @@ impl Default for GeneralConfig {
         }
       },
       show_all_in_taskbar: false,
+      snap_arrange: SnapArrangeConfig::default(),
+    }
+  }
+}
+
+/// Config for resizing windows that only respond to the OS' snap
+/// arrangement.
+///
+/// Some windows only forward a resize to the content they host while the
+/// OS considers them arranged (i.e. snapped into a snap layout). The
+/// `RAIL_WINDOW` windows used by `WSLg` behave this way: a plain
+/// `SetWindowPos` moves the host-side window, but the Linux surface inside
+/// keeps its old size unless the window is arranged.
+///
+/// To work around this, such windows are "primed" by injecting a synthetic
+/// snap chord (e.g. `Win+Left`), after which their tiling rect is
+/// re-applied. A window is primed once after it is managed and again
+/// after each restore from a minimized state, and only while it has
+/// focus.
+///
+/// # Platform-specific
+///
+/// - **Windows**: Used as described above.
+/// - **macOS**: Has no effect.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, rename_all(serialize = "camelCase"))]
+pub struct SnapArrangeConfig {
+  /// Whether to prime windows that require snap arrangement to be
+  /// resizable.
+  pub enabled: bool,
+
+  /// Modifier key of the snap chord to inject (e.g. `lwin` for
+  /// `Win+Left`).
+  ///
+  /// Only needs to be changed if the left Windows key is remapped by an
+  /// input remapper (e.g. `PowerToys` Keyboard Manager), or if the WM's
+  /// own keybindings would intercept the chord.
+  #[serde(
+    deserialize_with = "deserialize_key",
+    serialize_with = "serialize_key"
+  )]
+  pub modifier_key: Key,
+}
+
+impl Default for SnapArrangeConfig {
+  fn default() -> Self {
+    SnapArrangeConfig {
+      enabled: true,
+      modifier_key: Key::LWin,
     }
   }
 }
@@ -445,6 +498,28 @@ where
       Keybinding::new(keys).map_err(serde::de::Error::custom)
     })
     .collect()
+}
+
+/// Helper function for serializing a [`Key`].
+///
+/// Returns the key's canonical alias (e.g. `"lwin"`).
+// LINT: `serialize_with` requires the value to be passed by reference.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn serialize_key<S>(key: &Key, serializer: S) -> Result<S::Ok, S::Error>
+where
+  S: serde::Serializer,
+{
+  key.to_string().serialize(serializer)
+}
+
+/// Helper function for deserializing a string into a [`Key`].
+fn deserialize_key<'de, D>(deserializer: D) -> Result<Key, D::Error>
+where
+  D: serde::de::Deserializer<'de>,
+{
+  let key_str: &str = serde::de::Deserialize::deserialize(deserializer)?;
+
+  key_str.trim().parse().map_err(serde::de::Error::custom)
 }
 
 /// Helper function for deserializing [`HideMethod`].
