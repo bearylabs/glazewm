@@ -134,6 +134,15 @@ fn check_is_manageable(
         return Ok(None);
       }
 
+      // Ignore windows that their application has withdrawn from the
+      // taskbar and the task switcher without marking them as tool
+      // windows. Remote display hosts use this for the transient popups
+      // they mirror, which are otherwise indistinguishable from the
+      // real windows of the application they belong to.
+      if native_window.is_taskbar_deleted() {
+        return Ok(None);
+      }
+
       // Some applications spawn top-level windows for menus that
       // should be ignored. This includes the autocomplete popup in
       // Notepad++ and title bar menu in Keepass. Although not
