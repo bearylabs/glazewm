@@ -12,7 +12,7 @@ use wm_platform::{CornerStyle, OpacityValue};
 use wm_platform::{Rect, WindowZOrder};
 
 #[cfg(target_os = "windows")]
-use crate::commands::window::sync_snap_arrange;
+use crate::commands::window::{sync_snap_arrange, SnapArrangeSync};
 use crate::{
   models::{Container, WindowContainer},
   traits::{CommonGetters, PositionGetters, WindowGetters},
@@ -363,35 +363,7 @@ fn reposition_window(
   if config.value.general.hide_method == HideMethod::PlaceInCorner
     && !is_visible
   {
-    const VISIBLE_SLIVER: i32 = 1;
-
-    let monitor_rect = window
-      .monitor()
-      .context("No monitor.")?
-      .native_properties()
-      .working_area;
-
-    let frame = window.native_properties().frame;
-
-    let position_y = monitor_rect.bottom - VISIBLE_SLIVER;
-    let position_x = match hide_corner {
-      HideCorner::BottomLeft => {
-        monitor_rect.left + VISIBLE_SLIVER - frame.width()
-      }
-      HideCorner::BottomRight => monitor_rect.right - VISIBLE_SLIVER,
-    };
-
-    // Even though the window size is unchanged, `NativeWindow::set_frame`
-    // is used instead of `NativeWindow::reposition` because the latter
-    // resulted in occasional incorrect positionings on macOS.
-    window.native().set_frame(&Rect::from_xy(
-      position_x,
-      position_y,
-      frame.width(),
-      frame.height(),
-    ))?;
-
-    return Ok(());
+    return move_window_to_corner(window, hide_corner);
   }
 
   if window.active_drag().is_some() {
@@ -405,6 +377,31 @@ fn reposition_window(
       use wm_platform::{
         SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE,
         SWP_NOCOPYBITS, SWP_NOSENDCHANGING, WS_MAXIMIZEBOX,
+      };
+
+      // Some windows only forward the resize below to the content they
+      // host while arranged by the OS, and have to be primed to be in
+      // that state. Priming resizes the window, so it is given a rect
+      // that leaves room for that until it has been primed. Newly managed
+      // windows are covered here as well, since managing a window always
+      // queues a redraw.
+      let snap_arrange_sync = if is_visible {
+        sync_snap_arrange(window, &rect, state, config)
+      } else {
+        SnapArrangeSync::Unchanged
+      };
+
+      // The OS is still acting on the window's snap. Repositioning the
+      // window or changing its visibility during that time cancels the
+      // arrangement, so the window is left alone. Another redraw is
+      // queued once the priming attempt has settled.
+      if snap_arrange_sync == SnapArrangeSync::Skip {
+        return Ok(());
+      }
+
+      let rect = match snap_arrange_sync {
+        SnapArrangeSync::Nudged(nudged_rect) => nudged_rect,
+        _ => rect,
       };
 
       // Restore window if it's minimized/maximized and shouldn't be. This
@@ -455,28 +452,14 @@ fn reposition_window(
         _ => {
           swp_flags |= SWP_FRAMECHANGED;
 
-          // Some windows only forward the resize below to the content
-          // they host while arranged by the OS, and have to be primed to
-          // be in that state. Priming resizes the window, so it is given
-          // a rect that leaves room for that until it has been primed.
-          // Newly managed windows are covered here as well, since
-          // managing a window always queues a redraw.
-          let prime_rect = if is_visible {
-            sync_snap_arrange(window, &rect, state, config)
-          } else {
-            None
-          };
-
-          let rect = prime_rect.as_ref().unwrap_or(&rect);
-
-          window.native().set_window_pos(z_order, rect, swp_flags)?;
+          window.native().set_window_pos(z_order, &rect, swp_flags)?;
 
           // When there's a mismatch between the DPI of the monitor and the
           // window, the window might be sized incorrectly after the first
           // move. If we set the position twice, inconsistencies after the
           // first move are resolved.
           if window.has_pending_dpi_adjustment() {
-            window.native().set_window_pos(z_order, rect, swp_flags)?;
+            window.native().set_window_pos(z_order, &rect, swp_flags)?;
           }
         }
       }
@@ -491,6 +474,46 @@ fn reposition_window(
       }
     }
   }
+
+  Ok(())
+}
+
+/// Moves the window off-screen into the given corner of its monitor,
+/// which is how windows are hidden for [`HideMethod::PlaceInCorner`].
+///
+/// A one pixel sliver of the window is left on-screen, since the OS
+/// unmanages a window that is moved fully off-screen.
+fn move_window_to_corner(
+  window: &WindowContainer,
+  hide_corner: HideCorner,
+) -> anyhow::Result<()> {
+  const VISIBLE_SLIVER: i32 = 1;
+
+  let monitor_rect = window
+    .monitor()
+    .context("No monitor.")?
+    .native_properties()
+    .working_area;
+
+  let frame = window.native_properties().frame;
+
+  let position_y = monitor_rect.bottom - VISIBLE_SLIVER;
+  let position_x = match hide_corner {
+    HideCorner::BottomLeft => {
+      monitor_rect.left + VISIBLE_SLIVER - frame.width()
+    }
+    HideCorner::BottomRight => monitor_rect.right - VISIBLE_SLIVER,
+  };
+
+  // Even though the window size is unchanged, `NativeWindow::set_frame`
+  // is used instead of `NativeWindow::reposition` because the latter
+  // resulted in occasional incorrect positionings on macOS.
+  window.native().set_frame(&Rect::from_xy(
+    position_x,
+    position_y,
+    frame.width(),
+    frame.height(),
+  ))?;
 
   Ok(())
 }
