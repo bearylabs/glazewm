@@ -25,20 +25,21 @@ use windows::{
       },
       WindowsAndMessaging::{
         EnumWindows, GetAncestor, GetClassNameW, GetDesktopWindow,
-        GetForegroundWindow, GetLayeredWindowAttributes, GetShellWindow,
-        GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
-        GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
-        IsZoomed, SendNotifyMessageW, SetForegroundWindow,
-        SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPlacement,
-        SetWindowPos, ShowWindowAsync, WindowFromPoint, GA_ROOT,
-        GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_NOTOPMOST, HWND_TOP,
-        HWND_TOPMOST, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA,
-        LWA_COLORKEY, SET_WINDOW_POS_FLAGS, SWP_ASYNCWINDOWPOS,
-        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE,
-        SWP_NOOWNERZORDER, SWP_NOSENDCHANGING, SWP_NOSIZE, SWP_NOZORDER,
-        SWP_SHOWWINDOW, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
-        SW_SHOWNA, WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE,
-        WM_CLOSE, WPF_ASYNCWINDOWPLACEMENT, WS_DLGFRAME, WS_EX_LAYERED,
+        GetForegroundWindow, GetLayeredWindowAttributes, GetPropW,
+        GetShellWindow, GetWindow, GetWindowLongPtrW, GetWindowRect,
+        GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
+        IsWindowVisible, IsZoomed, SendNotifyMessageW,
+        SetForegroundWindow, SetLayeredWindowAttributes,
+        SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
+        ShowWindowAsync, WindowFromPoint, GA_ROOT, GWL_EXSTYLE, GWL_STYLE,
+        GW_OWNER, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
+        LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, LWA_COLORKEY,
+        SET_WINDOW_POS_FLAGS, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOOWNERZORDER,
+        SWP_NOSENDCHANGING, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+        SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOWNA,
+        WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE,
+        WPF_ASYNCWINDOWPLACEMENT, WS_DLGFRAME, WS_EX_LAYERED,
         WS_THICKFRAME,
       },
     },
@@ -380,6 +381,14 @@ impl NativeWindow {
   /// Implements [`NativeWindowWindowsExt::has_owner_window`].
   pub(crate) fn has_owner_window(&self) -> bool {
     unsafe { GetWindow(self.hwnd(), GW_OWNER) }.0 != 0
+  }
+
+  /// Implements [`NativeWindowWindowsExt::is_taskbar_deleted`].
+  pub(crate) fn is_taskbar_deleted(&self) -> bool {
+    // SAFETY: `GetPropW` is safe to call with any window handle. It
+    // returns a null handle for a window that does not have the
+    // property, including one that has already been destroyed.
+    !unsafe { GetPropW(self.hwnd(), w!("ITaskList_Deleted")) }.is_invalid()
   }
 
   /// Implements [`NativeWindowWindowsExt::has_window_style`].

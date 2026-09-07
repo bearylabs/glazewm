@@ -185,6 +185,20 @@ pub trait NativeWindowWindowsExt {
   /// This method is only available on Windows.
   fn has_owner_window(&self) -> bool;
 
+  /// Whether the window has been withdrawn from the taskbar and the task
+  /// switcher by its application.
+  ///
+  /// Detected via the `ITaskList_Deleted` window property, which the
+  /// shell honors to keep a window out of both. Applications set it on
+  /// windows that are not application windows in their own right, such as
+  /// the transient popups that `WSLg` hosts alongside the real windows of
+  /// a remote application.
+  ///
+  /// # Platform-specific
+  ///
+  /// This method is only available on Windows.
+  fn is_taskbar_deleted(&self) -> bool;
+
   /// Whether the window is currently arranged by the OS (i.e. snapped
   /// into a snap layout via `Win+Arrow`, snap assist, or a drag to a
   /// screen edge).
@@ -363,6 +377,10 @@ impl NativeWindowWindowsExt for NativeWindow {
 
   fn has_owner_window(&self) -> bool {
     self.inner.has_owner_window()
+  }
+
+  fn is_taskbar_deleted(&self) -> bool {
+    self.inner.is_taskbar_deleted()
   }
 
   fn is_arranged(&self) -> bool {
