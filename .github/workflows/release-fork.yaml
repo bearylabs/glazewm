@@ -1,0 +1,120 @@
+# Fork-specific release workflow. Not present upstream.
+#
+# Upstream's `release.yaml` cannot run in this fork: its `package-macos`
+# job imports an Apple signing certificate from secrets that only the
+# upstream repository holds. This workflow packages the Windows
+# installers only, which is all the WSLg patch applies to.
+#
+# Windows code signing is skipped automatically: `package.ps1` returns
+# early when AzureSignTool is absent, so the installers are unsigned and
+# SmartScreen will warn on first launch. Because the build is unsigned,
+# UIAccess is left disabled as well.
+#
+# Upstream's `release.yaml` and `package.yaml` are left untouched so that
+# merges from upstream stay conflict-free.
+name: Release (fork)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_number:
+        type: string
+        description: Version number to use for the build (e.g. `3.9.1.1`).
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-fork
+
+jobs:
+  # The version number is substituted into the WiX `Version` attribute,
+  # which only accepts numeric fields. Validate it up front so that a bad
+  # version fails in seconds rather than after the full build.
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate version number
+        env:
+          VERSION: ${{ inputs.version_number }}
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::Version '$VERSION' is invalid. Use 'major.minor.patch' or 'major.minor.patch.revision' (e.g. 3.9.1.1). Suffixes such as '-wslg.1' are rejected by WiX."
+            exit 1
+          fi
+
+  # UIAccess is left disabled, unlike upstream's `package.yaml`. It
+  # requires the executable to be signed and installed in a secure
+  # location, and this fork's builds are unsigned.
+  build:
+    needs: validate
+    uses: ./.github/workflows/build.yaml
+    with:
+      enable_ui_access: false
+      version_number: ${{ inputs.version_number }}
+
+  package-windows:
+    needs: build
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ inputs.version_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: build-*
+          merge-multiple: true
+
+      - name: Install WiX and its extensions
+        run: |
+          dotnet tool install --global wix --version 5.0.0
+          wix extension add WixToolset.UI.wixext/5 WixToolset.Util.wixext/5 WixToolset.BootstrapperApplications.wixext/5
+
+      # AzureSignTool is deliberately not installed, which makes
+      # `package.ps1` skip signing.
+      - name: Run packaging script
+        run: |
+          ./resources/scripts/package.ps1 -VersionNumber $env:VERSION
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: package-windows
+          if-no-files-found: error
+          path: out/installer-*
+
+  release:
+    needs: package-windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download installers
+        uses: actions/download-artifact@v8
+        with:
+          pattern: package-*
+          merge-multiple: true
+
+      - name: Rename installers
+        env:
+          # Add a `v` prefix to the version number.
+          VERSION: v${{ inputs.version_number }}
+        run: |
+          mv installer-universal.exe "glazewm-$VERSION.exe"
+          mv installer-arm64.msi "standalone-glazewm-$VERSION-arm64.msi"
+          mv installer-x64.msi "standalone-glazewm-$VERSION-x64.msi"
+
+      - name: Create draft release
+        env:
+          # Add a `v` prefix to the version number.
+          VERSION: v${{ inputs.version_number }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --generate-notes \
+            --draft \
+            "./glazewm-$VERSION.exe#$VERSION for Windows (standard, unsigned)" \
+            "./standalone-glazewm-$VERSION-arm64.msi#$VERSION for Windows (standalone, arm64, unsigned)" \
+            "./standalone-glazewm-$VERSION-x64.msi#$VERSION for Windows (standalone, x64, unsigned)"

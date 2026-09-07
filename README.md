@@ -1,3 +1,5 @@
+> **Fork notice**: this is a fork of [glzr-io/glazewm](https://github.com/glzr-io/glazewm) that adds tiling support for WSLg windows. It requires one Windows setting to be turned off. See [FORK.md](./FORK.md).
+
 <div align="center">
 
 > V3 is finally out - check out the changelog [here](https://github.com/glzr-io/GlazeWM/releases) 🔥
