@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use wm_common::DisplayState;
+use wm_common::{DisplayState, WindowState};
 use wm_platform::{
   DispatcherExtWindows, Key, NativeWindow, NativeWindowWindowsExt, Rect,
 };
@@ -87,6 +87,24 @@ const PRIME_SETTLE_DURATION: Duration = Duration::from_millis(300);
 /// never settle.
 const MAX_PRIME_SETTLE_DURATION: Duration = Duration::from_millis(2000);
 
+/// What a redraw should do with the rect it is about to apply to a
+/// window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnapArrangeSync {
+  /// The rect should be applied unchanged.
+  Unchanged,
+
+  /// The given rect should be applied instead, which keeps the window off
+  /// its snap zone until it has been primed.
+  Nudged(Rect),
+
+  /// The window must be left untouched by this redraw.
+  ///
+  /// The OS is still acting on the window's snap, which moving the window
+  /// or changing its visibility would cancel.
+  Skip,
+}
+
 /// Whether a window only forwards resizes to the content it hosts while
 /// the OS considers it arranged.
 ///
@@ -101,12 +119,22 @@ pub fn is_snap_arrange_window(
 }
 
 /// Whether the window is subject to priming under the current config.
+///
+/// Only tiling windows are primed. A floating window keeps the size that
+/// its application gave it, so the resize that priming enables is never
+/// applied to it, and snapping it would move it off the placement it is
+/// meant to have.
+///
+/// The transient popups that `WSLg` mirrors are not excluded here. They
+/// are indistinguishable from real windows by their styles, and are kept
+/// from being managed at all by `check_is_manageable`.
 fn is_prime_candidate(
   window: &WindowContainer,
   config: &UserConfig,
 ) -> bool {
   config.value.general.snap_arrange.enabled
     && is_snap_arrange_window(&window.native_properties())
+    && window.state() == WindowState::Tiling
 }
 
 /// Schedules priming of the window if it needs it, so that the tiling
@@ -133,18 +161,19 @@ fn is_prime_candidate(
 ///
 /// `rect` is the rect that the redraw is about to apply to the window.
 ///
-/// Returns the rect that the redraw should apply instead, which is
-/// [`PRIME_NUDGE_PX`] smaller while the window waits to be primed, or
-/// `None` if `rect` should be applied unchanged.
+/// Returns what the redraw should do with `rect`: apply it unchanged,
+/// apply a rect that is [`PRIME_NUDGE_PX`] smaller while the window waits
+/// to be primed, or leave the window untouched while the OS is acting on
+/// its snap.
 #[must_use]
 pub fn sync_snap_arrange(
   window: &WindowContainer,
   rect: &Rect,
   state: &mut WmState,
   config: &UserConfig,
-) -> Option<Rect> {
+) -> SnapArrangeSync {
   if !is_prime_candidate(window, config) {
-    return None;
+    return SnapArrangeSync::Unchanged;
   }
 
   // Give a window that couldn't be primed another chance whenever it's
@@ -153,21 +182,26 @@ pub fn sync_snap_arrange(
   // itself waits for the redraw that follows its shown event.
   if window.display_state() == DisplayState::Showing {
     window.update_snap_arrange_state(SnapArrangeState::retry);
-    return None;
+    return SnapArrangeSync::Unchanged;
   }
 
   if window.display_state() != DisplayState::Shown {
-    return None;
+    return SnapArrangeSync::Unchanged;
   }
 
   let snap_arrange_state = window.snap_arrange_state();
 
-  // The OS' arranged flag is unreliable until the attempt has settled,
-  // since the OS keeps acting on the snap until then.
+  // The OS is still acting on the snap, so the window has to be left at
+  // the rect the OS gave it. Applying a rect of the WM's own during that
+  // time cancels the arrangement. The window is redrawn again once the
+  // attempt has settled.
+  //
+  // The OS' arranged flag is unreliable until then as well, since the
+  // checks below would read it mid-snap.
   if snap_arrange_state.is_in_flight()
     || snap_arrange_state.is_settling(PRIME_SETTLE_DURATION)
   {
-    return None;
+    return SnapArrangeSync::Skip;
   }
 
   // The rect reaches the content the window hosts, so no priming is
@@ -183,7 +217,7 @@ pub fn sync_snap_arrange(
       snap_arrange_state.mark_applied(rect.clone());
     });
 
-    return None;
+    return SnapArrangeSync::Unchanged;
   }
 
   // The window is no longer arranged, but was given this rect while it
@@ -192,7 +226,7 @@ pub fn sync_snap_arrange(
   // sized that way. Priming it again would only be undone by the redraw
   // that follows, so it is deferred until the window's rect changes.
   if snap_arrange_state.applied_rect().as_ref() == Some(rect) {
-    return None;
+    return SnapArrangeSync::Unchanged;
   }
 
   // The OS cancels the arrangement of a primed window every so often
@@ -204,7 +238,7 @@ pub fn sync_snap_arrange(
   }
 
   if !window.snap_arrange_state().needs_prime() {
-    return None;
+    return SnapArrangeSync::Unchanged;
   }
 
   // Keep the earlier schedule if the same window is redrawn again, so
@@ -217,7 +251,7 @@ pub fn sync_snap_arrange(
     state.scheduled_snap_prime = Some((window.id(), Instant::now()));
   }
 
-  Some(Rect::from_xy(
+  SnapArrangeSync::Nudged(Rect::from_xy(
     rect.x(),
     rect.y(),
     (rect.width() - PRIME_NUDGE_PX).max(1),
