@@ -1,395 +1,163 @@
-> **Fork notice**: this is a fork of [glzr-io/glazewm](https://github.com/glzr-io/glazewm) that adds tiling support for WSLg windows. It requires one Windows setting to be turned off. See [FORK.md](./FORK.md).
-
 <div align="center">
+  <img src="./resources/assets/logo.svg" width="200" alt="GlazeWM logo" />
 
-> V3 is finally out - check out the changelog [here](https://github.com/glzr-io/GlazeWM/releases) 🔥
+# GlazeWM (WSLg fork)
 
-  <br>
-  <img src="./resources/assets/logo.svg" width="230" alt="GlazeWM logo" />
-  <br>
+**A tiling window manager for Windows, with tiling support for WSLg windows.**
 
-# GlazeWM
-
-**A tiling window manager for Windows inspired by i3wm.**
-
-[![Discord invite][discord-badge]][discord-link]
-[![Downloads][downloads-badge]][downloads-link]
-[![Good first issues][issues-badge]][issues-link]
-
-GlazeWM lets you easily organize windows and adjust their layout on the fly by using keyboard-driven commands.
-
+[About this fork](#about-this-fork) •
+[Requirements](#requirements) •
 [Installation](#installation) •
-[Default keybindings](#default-keybindings) •
-[Config documentation](#config-documentation) •
-[FAQ](#faq) •
-[Contributing ↗](https://github.com/glzr-io/glazewm/blob/main/CONTRIBUTING.md)
-
-![Demo video][demo-video]
+[Configuration](#configuration) •
+[Troubleshooting](#troubleshooting) •
+[Upstream docs](#upstream-documentation)
 
 </div>
 
-### 🌟 Key features
+## About this fork
 
-- Simple YAML configuration
-- Multi-monitor support
-- Customizable rules for specific windows
-- Easy one-click installation
-- Integration with [Zebar](https://github.com/glzr-io/zebar) as a status bar
+This is a fork of [glzr-io/glazewm](https://github.com/glzr-io/glazewm). It adds one thing: Linux GUI applications running under WSL2 tile properly instead of sitting letterboxed inside their own window frame.
+
+Everything else is upstream GlazeWM. The fork tracks upstream `main` and carries the WSLg patch on top of it, so keybindings, config format, CLI, and IPC are unchanged. For anything not specific to WSLg, use the [upstream documentation](#upstream-documentation).
+
+### The problem
+
+WSLg publishes Linux GUI applications through RDP `RAIL_WINDOW` host windows. Those windows forward a resize to the Linux surface they host only while Windows considers them *arranged*, meaning snapped into a snap layout.
+
+A tiling window manager positions windows with `SetWindowPos`, which does not arrange them. So stock GlazeWM moves and resizes the host window correctly, but the Linux application inside keeps its original size and ends up letterboxed.
+
+### The workaround
+
+When a `RAIL_WINDOW` is first managed, and again after each restore from a minimized state, GlazeWM briefly primes it. It injects a synthetic snap chord (`Win`+`Left` by default), waits for the OS to finish arranging the window, then re-applies the window's real tiling rect. After that, ordinary `SetWindowPos` calls reach the Linux surface and the window tiles like any other.
+
+Priming only runs while the window has focus, and only once per window per shown or restored cycle.
+
+This leans on OS behavior that Microsoft does not document and could change at any time, which is why it is not proposed upstream.
+
+## Requirements
+
+- Windows 10 or 11 with WSL2 and WSLg.
+- Snap Assist turned off. This one is not optional, see below.
+
+### Turn off Snap Assist
+
+Priming abuses the OS snap mechanism, so Windows tries to follow the injected snap with its Snap Assist flyout, the panel offering to fill the other half of the screen. GlazeWM dismisses the flyout on its own, but that extra window stealing focus mid-arrangement makes priming slower and less reliable.
+
+> Settings → System → Multitasking → expand **Snap windows** → turn off
+> **"When I snap a window, suggest what I can snap next to it"**
+> (German: *Beim Andocken eines Fensters anzeigen, was daneben angedockt werden kann*)
+
+Leave the other snap options alone. Only this one needs to be off.
 
 ## Installation
 
-**The latest version of GlazeWM is downloadable via [releases](https://github.com/glzr-io/GlazeWM/releases).** Zebar can optionally be installed as well via a checkbox during installation.
+Download the installer from this fork's [releases](https://github.com/bearylabs/glazewm/releases). Do not install from winget, Chocolatey, Scoop, or the upstream releases page, since none of those carry the WSLg patch.
 
-GlazeWM is also available through several package managers:
+The fork's builds are unsigned, so SmartScreen warns on first launch. Click "More info", then "Run anyway".
 
-**Winget**
+Unsigned also means UIAccess stays off, which upstream enables when it packages a signed build. Without UIAccess, GlazeWM cannot force the foreground window and cannot reposition windows of elevated processes. Everything else works the same.
 
-```sh
-winget install GlazeWM
-```
+Installing over an existing upstream GlazeWM is fine. The config file at `%userprofile%\.glzr\glazewm\config.yaml` works in both directions. The fork adds one optional key, and upstream GlazeWM ignores keys it does not know, so you can switch back without editing the config.
 
-**Chocolatey**
+## Configuration
 
-```sh
-choco install glazewm
-```
-
-**Scoop**
-
-```sh
-scoop bucket add extras
-scoop install extras/glazewm
-```
-
-## Contributing
-
-Help fix something that annoys you, or add a feature you've been wanting for a long time! Contributions are very welcome.
-
-Local development and guidelines are available in the [contributing guide](https://github.com/glzr-io/glazewm/blob/main/CONTRIBUTING.md).
-
-## Default keybindings
-
-On the first launch of GlazeWM, a default configuration can optionally be generated.
-
-Below is a cheat sheet of all available commands and their default keybindings.
-
-![Infographic](/resources/assets/cheatsheet.png)
-
-## Config documentation
-
-The [default config](https://github.com/glzr-io/glazewm/blob/main/resources/assets/sample-config.yaml) file is generated at `%userprofile%\.glzr\glazewm\config.yaml`.
-
-To use a different config file location, you can launch the GlazeWM executable with the CLI argument `--config="..."`, like so:
-
-```sh
-./glazewm.exe start --config="C:\<PATH_TO_CONFIG>\config.yaml"
-```
-
-Or pass a value for the `GLAZEWM_CONFIG_PATH` environment variable:
-
-```sh
-setx GLAZEWM_CONFIG_PATH "C:\<PATH_TO_CONFIG>\config.yaml"
-```
-
-With the benefit of using a custom path being that you can choose a different name for the config file, such as `glazewm.yaml`.
-
-### Config: General
+The WSLg workaround is on by default and lives under `general.snap_arrange`:
 
 ```yaml
 general:
-  # Commands to run when the WM has started (e.g. to run a script or launch
-  # another application).
-  startup_commands: []
-
-  # Commands to run just before the WM is shutdown.
-  shutdown_commands: []
-
-  # Commands to run after the WM config has reloaded.
-  config_reload_commands: []
-
-  # Whether to automatically focus windows underneath the cursor.
-  focus_follows_cursor: false
-
-  # Whether to switch back and forth between the previously focused
-  # workspace when focusing the current workspace.
-  toggle_workspace_on_refocus: false
-
-  cursor_jump:
-    # Whether to automatically move the cursor on the specified trigger.
+  snap_arrange:
+    # Whether to snap these windows so that they can be resized.
     enabled: true
 
-    # Trigger for cursor jump:
-    # - 'monitor_focus': Jump when focus changes between monitors.
-    # - 'window_focus': Jump when focus changes between windows.
-    trigger: "monitor_focus"
+    # Modifier key of the snap chord to inject (e.g. 'lwin' for Win+Left).
+    modifier_key: 'lwin'
 ```
 
-### Config: Keybindings
+Change `modifier_key` only if an input remapper such as PowerToys Keyboard Manager has remapped the left Windows key, or if one of your own keybindings would swallow the chord.
 
-The available keyboard shortcuts can be customized via the `keybindings` option. A keybinding consists of one or more key combinations and one or more commands to run when pressed.
+Set `enabled: false` to switch the workaround off. GlazeWM then treats WSLg windows like any other window, which puts you back to letterboxed Linux applications.
 
-It's recommended to use the alt key for keybindings. The Windows key is unfortunately a pain to remap, since the OS reserves certain keybindings (e.g. `lwin+l`).
+If your config predates the fork, you do not need to add anything. The defaults above apply when the key is missing.
 
-```yaml
-keybindings:
-  # Command(s) to run.
-  - commands: ["focus --workspace 1"]
+## Troubleshooting
 
-    # Key combination(s) to trigger the keybinding.
-    bindings: ["alt+1"]
+**A WSLg window stays letterboxed.** Priming only runs while the window has focus. Click the window, then move or resize it once. If it still does not resize, check that Snap Assist is off.
 
-  # Multiple commands can be run in a sequence (e.g. to move a window to a
-  # workspace + focus workspace).
-  - commands: ["move --workspace 1", "focus --workspace 1"]
-    bindings: ["alt+shift+1"]
+**A Snap Assist flyout appears when a WSLg window opens.** Snap Assist is still on. See [Turn off Snap Assist](#turn-off-snap-assist).
+
+**A window flickers to half the screen and back when it opens.** That is priming. One flicker per window per shown or restored cycle is expected.
+
+**The injected chord triggers one of my keybindings.** Pick a different `modifier_key`, or rebind the conflicting keybinding.
+
+## Upstream documentation
+
+The fork changes nothing outside WSLg handling, so upstream docs apply as written:
+
+- [Default keybindings and command cheat sheet](https://github.com/glzr-io/glazewm#default-keybindings)
+- [Config documentation](https://github.com/glzr-io/glazewm#config-documentation) (general, keybindings, gaps, workspaces, window rules, window effects, window behavior, binding modes)
+- [FAQ](https://github.com/glzr-io/glazewm#faq)
+- [Sample config](https://github.com/glzr-io/glazewm/blob/main/resources/assets/sample-config.yaml)
+- [Building from source](https://github.com/glzr-io/glazewm/blob/main/CONTRIBUTING.md)
+- [Zebar](https://github.com/glzr-io/zebar), the companion status bar
+
+Bugs that reproduce on upstream GlazeWM belong in [upstream's issue tracker](https://github.com/glzr-io/glazewm/issues). Anything WSLg-related goes [here](https://github.com/bearylabs/glazewm/issues).
+
+## Maintaining this fork
+
+Notes for whoever keeps this thing current. Skip if you only want to use it.
+
+### Repository layout
+
+| Branch / remote     | Purpose                                                              |
+| ------------------- | -------------------------------------------------------------------- |
+| `main`              | Upstream `main` plus the WSLg patch. This is the branch to build.    |
+| `origin` (remote)   | This fork.                                                            |
+| `upstream` (remote) | [glzr-io/glazewm](https://github.com/glzr-io/glazewm), the original. |
+
+The exact delta against upstream is always `git diff upstream/main main`.
+
+### Syncing upstream
+
+```sh
+git fetch upstream
+git checkout main
+git merge upstream/main   # resolve conflicts, then build and test
+git push origin main
 ```
 
-**Full list of keys that can be used for keybindings:**
+Upstream is merged in, not rebased on top of, so the same conflicts do not have to be resolved twice.
 
-<details>
-<summary>Keys list</summary>
+This README replaces upstream's, so it conflicts whenever upstream edits theirs. Resolve it by keeping the fork's version:
 
-| Key                   | Description                                                               |
-| --------------------- | ------------------------------------------------------------------------- |
-| `a` - `z`             | Alphabetical letter keys                                                  |
-| `0` - `9`             | Number keys                                                               |
-| `numpad0` - `numpad9` | Numerical keypad keys                                                     |
-| `f1` - `f24`          | Function keys                                                             |
-| `shift`               | Either left or right SHIFT key                                            |
-| `lshift`              | The left SHIFT key                                                        |
-| `rshift`              | The right SHIFT key                                                       |
-| `control`             | Either left or right CTRL key                                             |
-| `lctrl`               | The left CTRL key                                                         |
-| `rctrl`               | The right CTRL key                                                        |
-| `alt`                 | Either left or right ALT key                                              |
-| `lalt`                | The left ALT key                                                          |
-| `ralt`                | The right ALT key                                                         |
-| `lwin`                | The left ⊞ Windows logo key                                               |
-| `rwin`                | The right ⊞ Windows logo key                                              |
-| `space`               | The spacebar key                                                          |
-| `escape`              | The ESCAPE key                                                            |
-| `back`                | The BACKSPACE key                                                         |
-| `tab`                 | The TAB key                                                               |
-| `enter`               | The ENTER key                                                             |
-| `left`                | The ← arrow key                                                           |
-| `right`               | The → arrow key                                                           |
-| `up`                  | The ↑ arrow key                                                           |
-| `down`                | The ↓ arrow key                                                           |
-| `num_lock`            | The NUM LOCK key                                                          |
-| `scroll_lock`         | The SCROLL LOCK key                                                       |
-| `caps_lock`           | The CAPS LOCK key                                                         |
-| `page_up`             | The PAGE UP key                                                           |
-| `page_down`           | The PAGE DOWN key                                                         |
-| `insert`              | The INSERT key                                                            |
-| `delete`              | The DELETE key                                                            |
-| `end`                 | The END key                                                               |
-| `home`                | The HOME key                                                              |
-| `print_screen`        | The PRINT SCREEN key                                                      |
-| `multiply`            | The `*` key (only on numpad)                                              |
-| `add`                 | The `+` key (only on numpad)                                              |
-| `subtract`            | The `-` key (only on numpad)                                              |
-| `decimal`             | The DEL key (only on numpad)                                              |
-| `divide`              | The `/` key (only on numpad)                                              |
-| `volume_up`           | The volume up key                                                         |
-| `volume_down`         | The volume down key                                                       |
-| `volume_mute`         | The volume mute key                                                       |
-| `media_next_track`    | The media next track key                                                  |
-| `media_prev_track`    | The media prev track key                                                  |
-| `media_stop`          | The media stop key                                                        |
-| `media_play_pause`    | The media play/pause key                                                  |
-| `oem_semicolon`       | The `;`/`:` key on a US standard keyboard (varies by keyboard)            |
-| `oem_question`        | The `/`/`?` key on a US standard keyboard (varies by keyboard)            |
-| `oem_tilde`           | The `` ` ``/`~` key on a US standard keyboard (varies by keyboard)        |
-| `oem_open_brackets`   | The `[`/`{` key on a US standard keyboard (varies by keyboard)            |
-| `oem_pipe`            | The `\`/`\|` key on a US standard keyboard (varies by keyboard)           |
-| `oem_close_brackets`  | The `]`/`}` key on a US standard keyboard (varies by keyboard)            |
-| `oem_quotes`          | The `'`/`"` key on a US standard keyboard (varies by keyboard)            |
-| `oem_8`               | The `` ` ``/`¬` key on a UK keyboard (varies by keyboard)                 |
-| `oem_102`             | The `\`/`\|` key next to left Shift on ISO keyboards (varies by keyboard) |
-| `oem_plus`            | The `=`/`+` key on a US standard keyboard (varies by keyboard)            |
-| `oem_comma`           | The `,`/`<` key on a US standard keyboard (varies by keyboard)            |
-| `oem_minus`           | The `-`/`_` key on a US standard keyboard (varies by keyboard)            |
-| `oem_period`          | The `.`/`>` key on a US standard keyboard (varies by keyboard)            |
-| `muhenkan`            | The 無変換 (non-convert) key for Japanese keyboard layouts                |
-| `henkan`              | The 変換 (convert) key for Japanese keyboard layouts                      |
-
-</details>
-
-If a key is not in the list above, it is likely still supported if you use its character in a keybinding (e.g. `alt+å` for the Norwegian Å character).
-
-> German and US international keyboards treat the right-side alt key differently. For these keyboard layouts, use `ralt+ctrl` instead of `ralt` to bind the right-side alt key.
-
-### Config: Gaps
-
-The gaps between windows can be changed via the `gaps` property in the config file. Inner and outer gaps are set separately.
-
-```yaml
-gaps:
-  # Gap between adjacent windows.
-  inner_gap: "20px"
-
-  # Gap between windows and the screen edge.
-  outer_gap:
-    top: "20px"
-    right: "20px"
-    bottom: "20px"
-    left: "20px"
+```sh
+git checkout --ours README.md
+git add README.md
 ```
 
-### Config: Workspaces
+Nothing in the repository automates that, on purpose. A `merge=ours` entry in `.gitattributes` would work, but the merge driver it names has to be defined in local git config on every clone, and the point here is to keep the diff against upstream as small as possible.
 
-Workspaces need to be predefined via the `workspaces` property in the config file. A workspace is automatically assigned to each monitor on startup.
+### Releases
 
-```yaml
-workspaces:
-  # This is the unique ID for the workspace. It's used in keybinding
-  # commands, and is also the label shown in 3rd-party apps (e.g. Zebar) if
-  # `display_name` is not provided.
-  - name: "1"
+Releases come from `.github/workflows/release-fork.yaml`, triggered by hand from the Actions tab with a version number. It builds the Windows installers and opens a draft GitHub release. Review it, then publish.
 
-    # Optional override for the workspace label used in 3rd-party apps.
-    # Does not need to be unique.
-    display_name: "Work"
+Upstream's `release.yaml` cannot be used here. Its macOS job imports an Apple signing certificate from secrets that only the upstream repository holds. The fork workflow drops macOS packaging entirely, which is fine because the WSLg patch is Windows-only. Windows code signing is skipped too, hence the unsigned installers.
 
-    # Optionally force the workspace on a specific monitor if it exists.
-    # 0 is your leftmost screen, 1 is the next one to the right, and so on.
-    bind_to_monitor: 0
+Version numbers are not generated anywhere. Whatever gets typed into the workflow ends up in the binary (`VERSION_NUMBER`), the installers, and the git tag. It is substituted into WiX's `Version` attribute, so it has to be purely numeric: `major.minor.patch` or `major.minor.patch.revision`. Suffixes like `3.9.1-wslg.1` break the installer build and the workflow rejects them up front.
 
-    # Optionally prevent workspace from being deactivated when empty.
-    keep_alive: false
+The scheme is upstream version plus a fork revision, so `3.9.1.1` is the first fork release built on upstream `v3.9.1`.
+
+### Contributing back to upstream
+
+Changes meant for upstream must not branch off this fork's `main`, or the WSLg patch rides along in the diff. Branch off `upstream/main`:
+
+```sh
+git fetch upstream
+git checkout -b fix/some-upstream-thing upstream/main
+git push origin fix/some-upstream-thing
 ```
 
-### Config: Window rules
+Then open the pull request against `glzr-io/glazewm:main`.
 
-Commands can be run when a window is first launched. This is useful for adding window-specific behaviors like always starting a window as fullscreen or assigning to a specific workspace.
+## License
 
-Windows can be targeted by their process, class, and title. Multiple matching criteria can be used together to target a window more precisely.
-
-```yaml
-window_rules:
-  - commands: ["move --workspace 1"]
-    match:
-      # Move browsers to workspace 1.
-      - window_process: { regex: "msedge|brave|chrome" }
-
-  - commands: ["ignore"]
-    match:
-      # Ignores any Zebar windows.
-      - window_process: { equals: "zebar" }
-
-      # Ignores picture-in-picture windows for browsers.
-      # Note that *both* the title and class must match for the rule to run.
-      - window_title: { regex: "[Pp]icture.in.[Pp]icture" }
-        window_class: { regex: "Chrome_WidgetWin_1|MozillaDialogClass" }
-```
-
-### Config: Window effects
-
-Visual effects can be applied to windows via the `window_effects` option. Currently, colored borders are the only effect available with more to come in the future.
-
-> Note: Window effects are exclusive to Windows 11.
-
-```yaml
-window_effects:
-  # Visual effects to apply to the focused window.
-  focused_window:
-    # Highlight the window with a colored border.
-    border:
-      enabled: true
-      color: "#0000ff"
-
-  # Visual effects to apply to non-focused windows.
-  other_windows:
-    border:
-      enabled: false
-      color: "#d3d3d3"
-```
-
-### Config: Window behavior
-
-The `window_behavior` config option exists to customize the states that a window can be in (`tiling`, `floating`, `minimized`, and `fullscreen`).
-
-```yaml
-window_behavior:
-  # New windows are created in this state whenever possible.
-  # Allowed values: 'tiling', 'floating'.
-  initial_state: "tiling"
-
-  # Sets the default options for when a new window is created. This also
-  # changes the defaults for when the state change commands, like
-  # `set-floating`, are used without any flags.
-  state_defaults:
-    floating:
-      # Whether to center floating windows by default.
-      centered: true
-
-      # Whether to show floating windows as always on top.
-      shown_on_top: false
-
-    fullscreen:
-      # Maximize the window if possible. If the window doesn't have a
-      # maximize button, then it'll be made fullscreen normally instead.
-      maximized: false
-```
-
-### Config: Binding modes
-
-Binding modes are used to modify keybindings while GlazeWM is running.
-
-A binding mode can be enabled with `wm-enable-binding-mode --name <NAME>` and disabled with `wm-disable-binding-mode --name <NAME>`.
-
-```yaml
-binding_modes:
-  # When enabled, the focused window can be resized via arrow keys or HJKL.
-  - name: "resize"
-    keybindings:
-      - commands: ["resize --width -2%"]
-        bindings: ["h", "left"]
-      - commands: ["resize --width +2%"]
-        bindings: ["l", "right"]
-      - commands: ["resize --height +2%"]
-        bindings: ["k", "up"]
-      - commands: ["resize --height -2%"]
-        bindings: ["j", "down"]
-      # Press enter/escape to return to default keybindings.
-      - commands: ["wm-disable-binding-mode --name resize"]
-        bindings: ["escape", "enter"]
-```
-
-## FAQ
-
-**Q: How do I run GlazeWM on startup?**
-
-Right-click the GlazeWM icon in the system tray and select "Run on system startup".
-
-**Q: How can I create `<insert layout>`?**
-
-You can create custom layouts by changing the tiling direction with `alt+v`. This changes where the next window is placed _in relation to the current window_. If the current window's direction is horizontal, the new window will be placed to the right of it. If it is vertical, it will be placed below it. This also applies when moving windows; the tiling direction of the stationary window will affect where the moved window will be placed.
-
-Community-made scripts like [Dutch-Raptor/GAT-GWM](https://github.com/Dutch-Raptor/GAT-GWM) and [burgr033/GlazeWM-autotiling-python](https://github.com/burgr033/GlazeWM-autotiling-python) can be used to automatically change the tiling direction. Native support for automatic layouts isn't _currently_ supported.
-
-**Q: How do I create a rule for `<insert application>`?**
-
-To match a specific application, you need a command to execute and either the window's process name, title, or class name. For example, if you use Flow-Launcher and want to make the settings window float, you can do the following:
-
-```yaml
-window_rules:
-  - commands: ["set-floating"]
-    match:
-      - window_process: { equals: "Flow.Launcher" }
-        window_title: { equals: "Settings" }
-```
-
-Programs like Winlister or AutoHotkey's Window Spy can be useful for getting info about a window.
-
-**Q: How can I ignore GlazeWM's keybindings when `<insert application>` is focused?**
-
-This isn't currently supported, however, the keybinding `alt+shift+p` in the default config is used to disable all other keybindings until `alt+shift+p` is pressed again.
-
-[discord-badge]: https://img.shields.io/discord/1041662798196908052.svg?logo=discord&colorB=7289DA
-[discord-link]: https://discord.gg/ud6z3qjRvM
-[downloads-badge]: https://img.shields.io/github/downloads/glzr-io/glazewm/total?logo=github&logoColor=white
-[downloads-link]: https://github.com/glzr-io/glazewm/releases
-[issues-badge]: https://img.shields.io/badge/good_first_issues-7057ff
-[issues-link]: https://github.com/orgs/glzr-io/projects/4/views/1?sliceBy%5Bvalue%5D=good+first+issue
-[demo-video]: resources/assets/demo.webp
+Same as upstream, see [LICENSE.md](./LICENSE.md).
